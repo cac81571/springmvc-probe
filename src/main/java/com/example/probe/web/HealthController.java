@@ -77,8 +77,8 @@ public class HealthController {
      */
     @GetMapping("/hold")
     public ResponseEntity<Map<String, Object>> hold(
-            @RequestParam(defaultValue = "30") int seconds,
-            @RequestParam(defaultValue = "1") int count) {
+            @RequestParam(name = "seconds", defaultValue = "30") int seconds,
+            @RequestParam(name = "count", defaultValue = "1") int count) {
         if (APP_ENV_PROD.equalsIgnoreCase(System.getenv(APP_ENV))) {
             return ResponseEntity.notFound().build();
         }
