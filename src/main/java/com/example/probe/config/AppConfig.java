@@ -1,5 +1,6 @@
 package com.example.probe.config;
 
+import com.example.probe.health.DbConnectionCheck;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.datasource.lookup.JndiDataSourceLookup;
@@ -12,15 +13,10 @@ import java.util.concurrent.ExecutorService;
 @Configuration
 public class AppConfig {
 
-    /** 監視対象データソースの JNDI 名 */
-    static final String DS_JNDI = "java:jboss/datasources/OracleDS";
-    /** EAP 既定のマネージドスレッドプール */
-    static final String EXECUTOR_JNDI = "java:comp/DefaultManagedExecutorService";
-
     /** EAP のデータソースを JNDI で取得 */
     @Bean
     public DataSource dataSource() {
-        return new JndiDataSourceLookup().getDataSource(DS_JNDI);
+        return new JndiDataSourceLookup().getDataSource(DbConnectionCheck.dsJndi());
     }
 
     /**
@@ -29,6 +25,6 @@ public class AppConfig {
      */
     @Bean(destroyMethod = "")
     public ExecutorService healthExecutor() throws NamingException {
-        return InitialContext.doLookup(EXECUTOR_JNDI);
+        return InitialContext.doLookup(DbConnectionCheck.EXECUTOR_JNDI);
     }
 }

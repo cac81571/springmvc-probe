@@ -1,5 +1,6 @@
 package com.example.probe.web;
 
+import com.example.probe.health.DbConnectionCheck;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,21 +14,15 @@ import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 @RestController
 @RequestMapping("/health")
 public class HealthController {
 
-    /** isValid の待ち時間（秒） */
-    static final int VALID_TIMEOUT_SEC = 2;
-    /** Probe 全体の打ち切り時間（秒）。Probe の timeoutSeconds より短くする */
-    static final int TOTAL_TIMEOUT_SEC = 3;
-    static final String APP_ENV = "APP_ENV";
-    static final String APP_ENV_PROD = "prod";
+    /** テスト用 `/health/test` を有効にする環境変数。未設定・false は 404 */
+    static final String PROBE_DB_CHECK_TEST_ENABLE = "PROBE_DB_CHECK_TEST_ENABLE";
 
     private final DataSource dataSource;
     private final ExecutorService healthExecutor;
@@ -46,40 +41,20 @@ public class HealthController {
     /** readiness: コネクション取得 + isValid を別スレッドで実行し 3 秒で打ち切る */
     @GetMapping("/ready")
     public ResponseEntity<Map<String, String>> ready() {
-        CompletableFuture<Boolean> f = CompletableFuture.supplyAsync(() -> {
-            try {
-                return checkConnection();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        }, healthExecutor);
-        try {
-            if (f.get(TOTAL_TIMEOUT_SEC, TimeUnit.SECONDS)) {
-                return ResponseEntity.ok(Map.of("status", "UP"));
-            }
-            return down("connection invalid");
-        } catch (TimeoutException e) {
-            f.cancel(true);  // 応答は返すが、裏の処理は blocking-timeout まで残る場合あり
-            return down("timeout");
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return down("interrupted");
-        } catch (Exception e) {
-            Throwable c = e.getCause() != null && e.getCause().getCause() != null ? e.getCause().getCause() : e;
-            return down(c.getClass().getSimpleName() + ": " + c.getMessage());
-        }
+        String reason = DbConnectionCheck.downReason(dataSource, healthExecutor);
+        return reason == null ? ResponseEntity.ok(Map.of("status", "UP")) : down(reason);
     }
 
     /**
-     * プールを {@code count} 本占有する。1本で {@code DBMS_SESSION.SLEEP} し、残りは閉じずに掴んだままにする。
+     * テスト用。プールを {@code count} 本占有する。1本で {@code DBMS_SESSION.SLEEP} し、残りは閉じずに掴んだままにする。
      * {@code count} はデータソースの {@code max-pool-size} 以下にすること。超えると自分自身の空き待ちで詰まる。
-     * 環境変数 {@code APP_ENV=prod} のときは 404。
+     * 環境変数 {@code PROBE_DB_CHECK_TEST_ENABLE=true} のときだけ有効。未設定・false は 404。
      */
-    @GetMapping("/hold")
-    public ResponseEntity<Map<String, Object>> hold(
+    @GetMapping("/test")
+    public ResponseEntity<Map<String, Object>> test(
             @RequestParam(name = "seconds", defaultValue = "30") int seconds,
             @RequestParam(name = "count", defaultValue = "1") int count) {
-        if (APP_ENV_PROD.equalsIgnoreCase(System.getenv(APP_ENV))) {
+        if (!probeTestEnabled()) {
             return ResponseEntity.notFound().build();
         }
         int sec = Math.min(Math.max(seconds, 1), 120);
@@ -114,11 +89,8 @@ public class HealthController {
         }
     }
 
-    /** プールから借りて isValid。呼び出しスレッドを blocking-timeout + VALID_TIMEOUT_SEC まで占有しうる */
-    private boolean checkConnection() throws Exception {
-        try (Connection c = dataSource.getConnection()) {
-            return c.isValid(VALID_TIMEOUT_SEC);
-        }
+    private static boolean probeTestEnabled() {
+        return DbConnectionCheck.envFlag(PROBE_DB_CHECK_TEST_ENABLE);
     }
 
     private ResponseEntity<Map<String, String>> down(String reason) {
